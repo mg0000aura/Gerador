@@ -1613,6 +1613,12 @@ function App({ currentUser, onLogout }) {
 /* ============ Profile Modal ============ */
 function ProfileModal({ me, isAdmin, credits, keysCount, onClose, onUpdate, push }) {
   const [uploading, setUploading] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [newUsername, setNewUsername] = useState(me.username);
+  const [newPassword, setNewPassword] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
   const fileRef = useRef(null);
 
   const pickAvatar = () => fileRef.current && fileRef.current.click();
@@ -1625,6 +1631,49 @@ function ProfileModal({ me, isAdmin, credits, keysCount, onClose, onUpdate, push
       .then((dataUrl) => { onUpdate({ avatar: dataUrl }); push("Avatar atualizado!", "success"); })
       .catch((err) => push(err.message || "Erro ao processar a imagem.", "error"))
       .finally(() => setUploading(false));
+  };
+
+  const saveProfile = () => {
+    setError("");
+    if (!currentPassword) { setError("Digite sua senha atual para confirmar."); return; }
+    if (!authDbAvailable || !me.id) { setError("Serviço indisponível no momento."); return; }
+    setSaving(true);
+    usersRef.child(me.id).once("value")
+      .then((snap) => {
+        const val = snap.val();
+        if (!val) { setError("Conta não encontrada."); setSaving(false); return; }
+        if (val.password !== currentPassword) { setError("Senha atual incorreta."); setSaving(false); return; }
+
+        const finish = (patch) => {
+          if (Object.keys(patch).length === 0) { setSaving(false); setEditing(false); return; }
+          usersRef.child(me.id).update(patch)
+            .then(() => {
+              onUpdate(patch);
+              push("Perfil atualizado com sucesso!", "success");
+              setEditing(false);
+              setNewPassword("");
+              setCurrentPassword("");
+            })
+            .catch((err) => { console.error(err); setError("Erro ao salvar. Tente novamente."); })
+            .finally(() => setSaving(false));
+        };
+
+        const patch = {};
+        if (newPassword.trim()) patch.password = newPassword.trim();
+        const uname = newUsername.trim();
+        if (uname && uname !== me.username) {
+          usersRef.orderByChild("username").equalTo(uname).once("value").then((usnap) => {
+            const uval = usnap.val();
+            const clash = uval && Object.keys(uval).some((id) => id !== me.id);
+            if (clash) { setError("Esse nome de usuário já está em uso."); setSaving(false); return; }
+            patch.username = uname;
+            finish(patch);
+          });
+        } else {
+          finish(patch);
+        }
+      })
+      .catch((err) => { console.error(err); setError("Erro ao verificar a senha atual."); setSaving(false); });
   };
 
   return (
@@ -1645,12 +1694,37 @@ function ProfileModal({ me, isAdmin, credits, keysCount, onClose, onUpdate, push
           <Icon name="upload" size={15} /> {uploading ? "Enviando..." : "Alterar avatar"}
         </button>
 
-        <div className="profile-row"><span className="k">Usuário</span><span className="v">{me.username}</span></div>
-        <div className="profile-row"><span className="k">Gmail</span><span className="v">{me.gmail || "—"}</span></div>
-        <div className="profile-row"><span className="k">Cargo</span><span className="v">{me.role === "dono" ? "Dono" : me.role === "super" ? "Super usuário" : "Usuário"}</span></div>
-        <div className="profile-row"><span className="k">Key de revenda</span><span className="v mono">{me.resellerKey || "—"}</span></div>
-        <div className="profile-row"><span className="k">Créditos restantes</span><span className="v">{credits === null ? "—" : credits}</span></div>
-        <div className="profile-row"><span className="k">Keys geradas</span><span className="v">{keysCount}</span></div>
+        {!editing ? (
+          <>
+            <div className="profile-row"><span className="k">Usuário</span><span className="v">{me.username}</span></div>
+            <div className="profile-row"><span className="k">Gmail</span><span className="v">{me.gmail || "—"}</span></div>
+            <div className="profile-row"><span className="k">Cargo</span><span className="v">{me.role === "dono" ? "Dono" : me.role === "super" ? "Super usuário" : "Usuário"}</span></div>
+            <div className="profile-row"><span className="k">Key de revenda</span><span className="v mono">{me.resellerKey || "—"}</span></div>
+            <div className="profile-row"><span className="k">Créditos restantes</span><span className="v">{credits === null ? "—" : credits}</span></div>
+            <div className="profile-row"><span className="k">Keys geradas</span><span className="v">{keysCount}</span></div>
+            <button className="btn btn-primary full-btn" onClick={() => setEditing(true)} style={{ marginTop: 16 }}>
+              <Icon name="edit" size={15} /> Editar usuário e senha
+            </button>
+          </>
+        ) : (
+          <>
+            {error && <div className="auth-error">{error}</div>}
+            <span className="field-label">Novo usuário</span>
+            <input className="num-input" value={newUsername} onChange={(e) => setNewUsername(e.target.value)} placeholder="Usuário" />
+            <span className="field-label">Nova senha (deixe em branco para manter)</span>
+            <input className="num-input" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Nova senha" />
+            <span className="field-label">Senha atual (obrigatória para confirmar)</span>
+            <input className="num-input" type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} placeholder="Senha atual" />
+            <div className="row2">
+              <button className="btn btn-ghost full-btn" onClick={() => { setEditing(false); setError(""); setNewUsername(me.username); setNewPassword(""); setCurrentPassword(""); }}>
+                Cancelar
+              </button>
+              <button className="btn btn-primary full-btn" onClick={saveProfile} disabled={saving}>
+                <Icon name="check" size={15} /> {saving ? "Salvando..." : "Salvar"}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -1977,9 +2051,22 @@ function AuthScreen({ onSuccess }) {
 }
 
 function AuthGate() {
-  const [user, setUser] = useState(null);
-  if (!user) return <AuthScreen onSuccess={setUser} />;
-  return <App currentUser={user} onLogout={() => setUser(null)} />;
+  const [user, setUser] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("panico_session")); } catch { return null; }
+  });
+
+  const handleSuccess = (u) => {
+    localStorage.setItem("panico_session", JSON.stringify(u));
+    setUser(u);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("panico_session");
+    setUser(null);
+  };
+
+  if (!user) return <AuthScreen onSuccess={handleSuccess} />;
+  return <App currentUser={user} onLogout={handleLogout} />;
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<AuthGate />);
