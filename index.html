@@ -1077,7 +1077,7 @@ function GenerateModal({ product, onClose, onGenerate, onCopy }) {
   const isKU = isKeysUsersProduct(product);
   const productName = PRODUCT_LABELS[product] || product;
 
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
     setSaving(true);
     let durationId = duration;
     let opts = {};
@@ -1090,9 +1090,12 @@ function GenerateModal({ product, onClose, onGenerate, onCopy }) {
         opts = { dispositivos: devices, qty: q };
       }
     }
-    const result = onGenerate(durationId, product, opts);
-    setCreated(result);
-    setSaving(false);
+    try {
+      const result = await onGenerate(durationId, product, opts);
+      if (result) setCreated(result);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const codes = Array.isArray(created) ? created : (created ? [created] : []);
@@ -1433,14 +1436,57 @@ function App({ currentUser, onLogout }) {
       .catch(() => push("Não foi possível copiar automaticamente. Selecione a key manualmente.", "error"));
   };
 
-  const generateKey = (durationId, product = "apk_mod", opts = {}) => {
+  /** Consome créditos da key de revenda (1 crédito por key gerada). */
+  const consumeCredits = (amount) => {
+    return new Promise((resolve, reject) => {
+      if (!amount || amount < 1) return resolve(true);
+      if (!authDbAvailable || !resellersRef) {
+        if (isAdmin) return resolve(true);
+        return reject(new Error("Serviço de créditos indisponível."));
+      }
+      if (!me.resellerKey) {
+        if (isAdmin) return resolve(true);
+        return reject(new Error("Sua conta não tem key de revenda vinculada."));
+      }
+      resellersRef.orderByChild("resellerKey").equalTo(me.resellerKey).once("value")
+        .then((snap) => {
+          const val = snap.val();
+          if (!val) return reject(new Error("Key de revenda não encontrada."));
+          const [resellerId, reseller] = Object.entries(val)[0];
+          const bal = Number(reseller.balance) || 0;
+          if (bal < amount) {
+            return reject(new Error(`Créditos insuficientes (${bal}). Precisa de ${amount}.`));
+          }
+          const next = bal - amount;
+          return resellersRef.child(resellerId).update({ balance: next }).then(() => {
+            setCredits(next);
+            resolve(true);
+          });
+        })
+        .catch((err) => {
+          console.error(err);
+          reject(new Error("Erro ao debitar créditos."));
+        });
+    });
+  };
+
+  const generateKey = async (durationId, product = "apk_mod", opts = {}) => {
     const targetRef = getDbRefForProduct(product);
     const now2 = Date.now();
+    const count = isKeysUsersProduct(product)
+      ? Math.max(1, Math.min(50, parseInt(opts.qty, 10) || 1))
+      : 1;
+
+    // Debita créditos ANTES de gerar
+    try {
+      await consumeCredits(count);
+    } catch (err) {
+      push(err.message || "Não foi possível usar os créditos.", "error");
+      return null;
+    }
 
     // ----- PROXY / FAKE LAG (estrutura KeysUsers do SWB) -----
-    // Não adiciona local otimista quando Firebase está online (evita key duplicada)
     if (isKeysUsersProduct(product)) {
-      const count = Math.max(1, Math.min(50, parseInt(opts.qty, 10) || 1));
       const dispositivos = opts.dispositivos || "Livre";
       const validade = durationToValidade(durationId, opts.customDays);
       const daysNum = parseInt(validade, 10) || 0;
@@ -1469,9 +1515,6 @@ function App({ currentUser, onLogout }) {
 
         if (fbAvailable && targetRef) {
           const newRef = targetRef.push();
-          // Estrutura idêntica ao gerador SWB (KeysUsers).
-          // dias DEVE ser número parseável (Double.parseDouble no APK) — nunca string vazia.
-          // dias "0" = ainda não ativada; no 1º acesso o APK troca por timestamp de expiração.
           newRef.set({
             key: code,
             status: "",
@@ -1488,15 +1531,13 @@ function App({ currentUser, onLogout }) {
       }
 
       if (!fbAvailable || !targetRef) {
-        // Offline: só local
         setKeys((k) => [...localRecords, ...k]);
         setPermIssue(true);
       }
-      // Online: a lista atualiza pelo listener do Firebase (1 key só)
       push(
         count > 1
-          ? `${count} keys ${PRODUCT_LABELS[product]} geradas!`
-          : `Key ${PRODUCT_LABELS[product]} gerada!`,
+          ? `${count} keys ${PRODUCT_LABELS[product]} geradas (−${count} créditos)!`
+          : `Key ${PRODUCT_LABELS[product]} gerada (−1 crédito)!`,
         "success"
       );
       return count === 1 ? codes[0] : codes;
@@ -1536,12 +1577,11 @@ function App({ currentUser, onLogout }) {
       }).catch((err) => {
         console.error(err);
         setPermIssue(true);
-        // fallback local se falhar gravação
         setKeys((k) => [record, ...k]);
         push("Gerada localmente, mas não foi salva no Firebase (sem permissão).", "error");
       });
     }
-    push(`Key ${PRODUCT_LABELS[product] || product} gerada!`, "success");
+    push(`Key ${PRODUCT_LABELS[product] || product} gerada (−1 crédito)!`, "success");
     return code;
   };
 
