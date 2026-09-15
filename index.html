@@ -401,6 +401,23 @@
   }
   .generated-box .code{ font-size:14.5px; color:#a9f7c6; word-break:break-all; }
 
+  .activate-instructions{
+    background:rgba(255,201,61,.07); border:1px solid rgba(255,201,61,.28);
+    border-radius:11px; padding:14px 16px; margin-bottom:16px; font-size:12.5px; color:var(--ink-dim); line-height:1.5;
+  }
+  .activate-instructions .activate-title{
+    display:flex; align-items:center; gap:7px; font-weight:700; color:var(--yellow); margin-bottom:8px; font-size:13px;
+  }
+  .activate-instructions ol{ margin:0 0 8px 18px; padding:0; }
+  .activate-instructions li{ margin-bottom:4px; }
+  .activate-instructions .activate-note{ margin:0; color:var(--ink-faint); font-size:11.5px; }
+
+  .badge.product-mod{ background:rgba(138,63,240,.15); color:#c9a6ff; border-color:rgba(138,63,240,.35); }
+  .badge.product-flag{ background:rgba(255,75,75,.12); color:#ff8a8a; border-color:rgba(255,75,75,.3); }
+  .badge.product-proxy{ background:rgba(51,217,119,.12); color:#7dffb0; border-color:rgba(51,217,119,.35); }
+  .dot.pending{ background:#8ba3c7; box-shadow:0 0 10px rgba(139,163,199,.45); }
+  .status-txt.pending{ color:#8ba3c7; }
+
   .full-btn{ width:100%; justify-content:center; }
 
   .qty-row{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
@@ -633,7 +650,8 @@
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
 /* ============ Firebase ============ */
-const firebaseConfig = {
+/* APK MOD (projeto existente) */
+const modFirebaseConfig = {
   apiKey: "AIzaSyAov8lQc9GKeV-SokT5gjv-aLCew2C6M-A",
   authDomain: "mg00-ed424.firebaseapp.com",
   databaseURL: "https://mg00-ed424-default-rtdb.firebaseio.com",
@@ -642,15 +660,114 @@ const firebaseConfig = {
   messagingSenderId: "877652383572",
   appId: "1:877652383572:web:96cd6ad86344741ad31ac1",
 };
-let dbRef = null;
+/* FAKE LAG */
+const fakeLagFirebaseConfig = {
+  apiKey: "AIzaSyB4FQAvYA6kzHnV5NwubSKMw_3R59fsMFw",
+  authDomain: "fake-lag-a463f.firebaseapp.com",
+  databaseURL: "https://fake-lag-a463f-default-rtdb.firebaseio.com",
+  projectId: "fake-lag-a463f",
+  storageBucket: "fake-lag-a463f.firebasestorage.app",
+  messagingSenderId: "820531005128",
+  appId: "1:820531005128:web:e7547008c04a2fead507fd",
+  measurementId: "G-HBV2YEZVTC",
+};
+/* PROXY (KeysUsers) */
+const proxyFirebaseConfig = {
+  apiKey: "AIzaSyBzS6xMZD7jF2nOE3vIuX2I8nNb7yXEZws",
+  authDomain: "proxy-d112e.firebaseapp.com",
+  databaseURL: "https://proxy-d112e-default-rtdb.firebaseio.com",
+  projectId: "proxy-d112e",
+  storageBucket: "proxy-d112e.firebasestorage.app",
+  messagingSenderId: "184299560050",
+  appId: "1:184299560050:web:85bd7a6e05568d9220b6eb",
+  measurementId: "G-Q7GRGVWTWF",
+};
+
+let modDbRef = null;
+let fakeLagDbRef = null;
+let proxyDbRef = null;
 let fbAvailable = false;
 try {
   if (typeof firebase === "undefined") throw new Error("SDK do Firebase não carregou (bloqueado por rede/ad-block?).");
-  firebase.initializeApp(firebaseConfig);
-  dbRef = firebase.database().ref("panico_keys");
+  firebase.initializeApp(modFirebaseConfig);
+  modDbRef = firebase.database().ref("panico_keys");
+  const fakeLagApp = firebase.initializeApp(fakeLagFirebaseConfig, "fake-lag-app");
+  // FAKE LAG usa a mesma estrutura KeysUsers do PROXY (gerador SWB)
+  fakeLagDbRef = firebase.database(fakeLagApp).ref("KeysUsers");
+  const proxyApp = firebase.initializeApp(proxyFirebaseConfig, "proxy-app");
+  proxyDbRef = firebase.database(proxyApp).ref("KeysUsers");
   fbAvailable = true;
 } catch (e) {
   console.error("Erro ao iniciar Firebase:", e);
+}
+
+/* Compat: dbRef aponta pro MOD */
+const dbRef = modDbRef;
+
+function getDbRefForProduct(product) {
+  if (product === "fake_lag") return fakeLagDbRef;
+  if (product === "proxy") return proxyDbRef;
+  return modDbRef;
+}
+
+function isKeysUsersProduct(product) {
+  return product === "proxy" || product === "fake_lag";
+}
+
+/** Converte registro KeysUsers (PROXY / FAKE LAG) para o formato unificado do painel */
+function mapKeysUsersRecord(id, v, product) {
+  const code = v.key || v.code || "";
+  const statusRaw = (v.status || "").toLowerCase().trim();
+  // dias no SWB é sempre string numérica: "0" = não ativada, timestamp ms = expiração
+  const diasStr = String(v.dias ?? "0").trim() || "0";
+  const diasNum = parseFloat(diasStr) || 0;
+  const validadeNum = parseFloat(String(v.validade ?? "0").trim()) || 0;
+  // Ativada se status diz isso OU se dias já é timestamp de expiração
+  const activated =
+    statusRaw === "ativada" ||
+    statusRaw === "ativa" ||
+    statusRaw === "ativado" ||
+    diasNum > 1e12;
+  let expiresAt = null;
+  let activatedAt = null;
+  if (activated) {
+    if (diasNum > 1e12) {
+      expiresAt = diasNum;
+      activatedAt = Date.now(); // aproximado; o APK guarda só a expiração em dias
+    } else if (validadeNum > 0 && validadeNum < 100000) {
+      activatedAt = Date.now();
+      expiresAt = activatedAt + validadeNum * 24 * 3600 * 1000;
+    }
+  }
+  let duration = "7d";
+  if (validadeNum === 1) duration = "1d";
+  else if (validadeNum === 3) duration = "3d";
+  else if (validadeNum === 7) duration = "7d";
+  else if (validadeNum === 10) duration = "10d";
+  else if (validadeNum === 15) duration = "15d";
+  else if (validadeNum === 30) duration = "30d";
+  else if (validadeNum === 60) duration = "60d";
+  else if (validadeNum === 90) duration = "90d";
+  else if (validadeNum === 0 || validadeNum >= 1000) duration = "lifetime";
+  else if (validadeNum > 0) duration = `${validadeNum}d`;
+  const durationMs = duration === "lifetime" ? null : (validadeNum > 0 && validadeNum < 1000 ? validadeNum * 24 * 3600 * 1000 : null);
+  return {
+    id,
+    code,
+    product,
+    duration,
+    durationMs,
+    createdAt: v.createdAt || activatedAt || 0,
+    activatedAt: activated ? activatedAt : null,
+    expiresAt: activated ? expiresAt : null,
+    owner: v.owner || product,
+    paused: statusRaw === "pausada" || statusRaw === "banida",
+    proxyStatus: v.status || "",
+    proxyValidade: v.validade,
+    proxyDias: v.dias,
+    proxyDispositivos: v.dispositivos || "Livre",
+    proxyDevice: v.device || "",
+  };
 }
 
 /* ---- Segundo projeto Firebase (key-coisas): contas de acesso + créditos de revendedor ---- */
@@ -743,14 +860,51 @@ function randSegment(len) {
   for (let i = 0; i < len; i++) out += chars[Math.floor(Math.random() * chars.length)];
   return out;
 }
-function generateKeyCode() {
+function generateKeyCode(product) {
+  // PROXY / FAKE LAG: formato do gerador SWB (ex: Panico-dp6716)
+  if (product === "proxy" || product === "fake_lag") {
+    const prefix = product === "fake_lag" ? "Flag" : "Panico";
+    return `${prefix}-${randSegment(6).toLowerCase()}`;
+  }
   return `PANICO-${randSegment(4)}-${randSegment(4)}-${randSegment(4)}`;
 }
 
-function computeStatus(expiresAt, now, paused) {
+const PRODUCT_LABELS = {
+  apk_mod: "APK MOD",
+  fake_lag: "FAKE LAG",
+  proxy: "PROXY",
+};
+
+function durationToValidade(durationId, customDays) {
+  // validade SEMPRE string numérica (o APK faz Double.parseDouble)
+  // vitalícia: valor alto como no gerador original (ex. 5000)
+  if (durationId === "lifetime") return "99999";
+  if (durationId === "custom" && customDays != null) {
+    const n = parseInt(customDays, 10);
+    return String(Number.isFinite(n) && n > 0 ? n : 1);
+  }
+  const map = { "1d": "1", "3d": "3", "7d": "7", "10d": "10", "15d": "15", "30d": "30", "60d": "60", "90d": "90" };
+  return map[durationId] || "7";
+}
+
+/** Status da key.
+ *  - activatedAt == null  → ainda não validada no APK (tempo não começou)
+ *  - expiresAt == null + activated → vitalícia
+ *  - expiresAt no futuro → ativa / acabando
+ *  - expiresAt no passado → expirada
+ */
+function computeStatus(item, now) {
+  const paused = item.paused;
+  const activatedAt = item.activatedAt;
+  const expiresAt = item.expiresAt;
   if (paused) {
     return { status: "paused", label: "Pausada", detail: "Pausada pelo admin" };
   }
+  // Ainda não ativada no APK: tempo não começa a contar
+  if (activatedAt === null || activatedAt === undefined) {
+    return { status: "pending", label: "Aguardando", detail: "Aguardando 1º acesso no APK" };
+  }
+  // Ativada e vitalícia
   if (expiresAt === null || expiresAt === undefined) {
     return { status: "green", label: "Vitalícia", detail: "Sem expiração" };
   }
@@ -769,14 +923,19 @@ function computeStatus(expiresAt, now, paused) {
 
 /* Pausa/retoma uma key preservando o tempo restante (congela o relógio). */
 function applyPause(id, keyData, pause) {
+  const product = keyData.product || "apk_mod";
+  const ref = getDbRefForProduct(product);
   const now = Date.now();
+  if (isKeysUsersProduct(product)) {
+    return ref.child(id).update({ status: pause ? "pausada" : "ativada" });
+  }
   if (pause) {
-    return dbRef.child(id).update({ paused: true, pausedAt: now });
+    return ref.child(id).update({ paused: true, pausedAt: now });
   }
   const shift = now - (keyData.pausedAt || now);
   const patch = { paused: false, pausedAt: null };
   if (keyData.expiresAt !== null && keyData.expiresAt !== undefined) patch.expiresAt = keyData.expiresAt + shift;
-  return dbRef.child(id).update(patch);
+  return ref.child(id).update(patch);
 }
 
 function fmtDate(ts) {
@@ -886,55 +1045,139 @@ function ToastStack({ toasts }) {
 }
 
 /* ============ Generate Modal ============ */
-function GenerateModal({ onClose, onGenerate, onCopy }) {
+const KEYS_USERS_DURATIONS = [
+  { id: "1d", label: "1 Dia", days: 1 },
+  { id: "3d", label: "3 Dias", days: 3 },
+  { id: "7d", label: "7 Dias", days: 7 },
+  { id: "15d", label: "15 Dias", days: 15 },
+  { id: "30d", label: "30 Dias", days: 30 },
+  { id: "60d", label: "60 Dias", days: 60 },
+  { id: "90d", label: "90 Dias", days: 90 },
+  { id: "lifetime", label: "Vitalícia", days: 0 },
+  { id: "custom", label: "Personalizado", days: null },
+];
+
+const KEYS_USERS_DEVICES = [
+  { id: "Livre", label: "Livre" },
+  { id: "1", label: "1 Disp." },
+  { id: "2", label: "2 Disp." },
+  { id: "3", label: "3 Disp." },
+  { id: "5", label: "5 Disp." },
+  { id: "10", label: "10 Disp." },
+];
+
+function GenerateModal({ product, onClose, onGenerate, onCopy }) {
   const [duration, setDuration] = useState("7d");
+  const [devices, setDevices] = useState("Livre");
+  const [customDays, setCustomDays] = useState(1);
+  const [qty, setQty] = useState(1);
   const [created, setCreated] = useState(null);
   const [saving, setSaving] = useState(false);
 
+  const isKU = isKeysUsersProduct(product);
+  const productName = PRODUCT_LABELS[product] || product;
+
   const handleGenerate = () => {
     setSaving(true);
-    const code = onGenerate(duration);
-    setCreated(code);
+    let durationId = duration;
+    let opts = {};
+    if (isKU) {
+      const q = Math.max(1, Math.min(50, parseInt(qty, 10) || 1));
+      if (duration === "custom") {
+        opts = { customDays: Math.max(1, parseInt(customDays, 10) || 1), dispositivos: devices, qty: q };
+        durationId = "custom";
+      } else {
+        opts = { dispositivos: devices, qty: q };
+      }
+    }
+    const result = onGenerate(durationId, product, opts);
+    setCreated(result);
     setSaving(false);
   };
 
-  const copyGenerated = () => onCopy(created);
+  const codes = Array.isArray(created) ? created : (created ? [created] : []);
+  const copyGenerated = (code) => onCopy(code || codes[0]);
+  const copyAll = () => onCopy(codes.join("\n"));
 
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label="Gerar nova key">
+      <div className="modal" role="dialog" aria-modal="true" aria-label="Gerar nova key" style={{ maxHeight: "92vh", overflowY: "auto" }}>
         <div className="modal-head">
-          <h2>GERAR NOVA KEY</h2>
+          <h2>GERAR KEY — {productName}</h2>
           <button className="close" onClick={onClose} aria-label="Fechar"><Icon name="x" /></button>
         </div>
 
         {!created ? (
           <>
-            <span className="field-label">Duração da licença</span>
-            <div className="duration-grid">
-              {DURATIONS.map((d) => (
-                <button
-                  key={d.id}
-                  className={`dur-opt ${duration === d.id ? "sel" : ""}`}
-                  onClick={() => setDuration(d.id)}
-                >
-                  {d.label}
-                </button>
-              ))}
-            </div>
+            {isKU ? (
+              <>
+                <span className="field-label">Duração (validade)</span>
+                <div className="duration-grid">
+                  {KEYS_USERS_DURATIONS.map((d) => (
+                    <button key={d.id} className={`dur-opt ${duration === d.id ? "sel" : ""}`} onClick={() => setDuration(d.id)}>
+                      {d.label}
+                    </button>
+                  ))}
+                </div>
+                {duration === "custom" && (
+                  <>
+                    <span className="field-label">Dias personalizados</span>
+                    <input type="number" className="num-input" min={1} value={customDays} onChange={(e) => setCustomDays(e.target.value)} placeholder="Ex: 45" />
+                  </>
+                )}
+                <span className="field-label">Dispositivos</span>
+                <div className="duration-grid">
+                  {KEYS_USERS_DEVICES.map((d) => (
+                    <button key={d.id} className={`dur-opt ${devices === d.id ? "sel" : ""}`} onClick={() => setDevices(d.id)}>
+                      {d.label}
+                    </button>
+                  ))}
+                </div>
+                <span className="field-label">Quantidade de keys</span>
+                <input type="number" className="num-input" min={1} max={50} value={qty} onChange={(e) => setQty(e.target.value)} placeholder="1" />
+              </>
+            ) : (
+              <>
+                <span className="field-label">Duração da licença</span>
+                <div className="duration-grid">
+                  {DURATIONS.map((d) => (
+                    <button key={d.id} className={`dur-opt ${duration === d.id ? "sel" : ""}`} onClick={() => setDuration(d.id)}>
+                      {d.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+
             <button className="btn btn-primary full-btn" onClick={handleGenerate} disabled={saving}>
-              <Icon name="zap" size={16} /> {saving ? "Gerando..." : "Gerar Key"}
+              <Icon name="zap" size={16} /> {saving ? "Gerando..." : isKU && Number(qty) > 1 ? `Gerar ${qty} Keys` : "Gerar Key"}
             </button>
           </>
         ) : (
           <>
-            <span className="field-label">Key gerada</span>
-            <div className="generated-box">
-              <span className="mono code">{created}</span>
-              <button className="icon-btn" onClick={copyGenerated} aria-label="Copiar key">
-                <Icon name="copy" size={15} />
-              </button>
-            </div>
+            <span className="field-label">
+              {codes.length > 1 ? `${codes.length} keys geradas` : "Key gerada"} — {productName}
+            </span>
+            {codes.length === 1 ? (
+              <div className="generated-box">
+                <span className="mono code">{codes[0]}</span>
+                <button className="icon-btn" onClick={() => copyGenerated(codes[0])} aria-label="Copiar key">
+                  <Icon name="copy" size={15} />
+                </button>
+              </div>
+            ) : (
+              <div className="generated-box" style={{ flexDirection: "column", alignItems: "stretch", gap: 8 }}>
+                {codes.map((c) => (
+                  <div key={c} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <span className="mono code">{c}</span>
+                    <button className="icon-btn" onClick={() => copyGenerated(c)} aria-label="Copiar"><Icon name="copy" size={14} /></button>
+                  </div>
+                ))}
+                <button className="btn btn-ghost full-btn" onClick={copyAll} style={{ marginTop: 4 }}>
+                  <Icon name="copy" size={14} /> Copiar todas
+                </button>
+              </div>
+            )}
             <button className="btn btn-primary full-btn" onClick={onClose}>
               <Icon name="check" size={16} /> Concluir
             </button>
@@ -951,15 +1194,16 @@ function EditModal({ item, onClose, onSave }) {
 
   const applyDelta = (n) => setDeltaDays((d) => d + n);
 
-  const isLifetime = item.expiresAt === null || item.expiresAt === undefined;
+  const notActivated = item.activatedAt === null || item.activatedAt === undefined;
+  const isLifetime = !notActivated && (item.expiresAt === null || item.expiresAt === undefined);
 
   const saveChange = (newExpiresAt) => {
-    onSave(item.id, newExpiresAt);
+    onSave(item.id, newExpiresAt, item.product);
     onClose();
   };
 
   const handleSave = () => {
-    const base = isLifetime ? Date.now() : item.expiresAt;
+    const base = notActivated || isLifetime ? Date.now() : item.expiresAt;
     const newExpiresAt = base + deltaDays * 24 * 3600 * 1000;
     saveChange(newExpiresAt);
   };
@@ -977,7 +1221,11 @@ function EditModal({ item, onClose, onSave }) {
 
         <div className="edit-current">
           <span className="code mono">{item.code}</span>
-          {isLifetime ? "Licença vitalícia" : `Expira em: ${fmtDate(item.expiresAt)}`}
+          {notActivated
+            ? "Aguardando 1º acesso no APK (tempo ainda não começou)"
+            : isLifetime
+              ? "Licença vitalícia"
+              : `Expira em: ${fmtDate(item.expiresAt)}`}
         </div>
 
         <span className="field-label">Ajustar dias (some ou remova)</span>
@@ -1030,7 +1278,7 @@ function useConfirm() {
 }
 
 function StatusBits({ item, now }) {
-  const s = computeStatus(item.expiresAt, now, item.paused);
+  const s = computeStatus(item, now);
   return (
     <div className="status-cell">
       <span className={`dot ${s.status}`}></span>
@@ -1073,8 +1321,14 @@ function KeyActions({ item, onEdit, onDelete, onCopy, onTogglePause, isAdmin }) 
 }
 
 function durationLabel(id) {
+  if (!id) return "—";
   const d = DURATIONS.find((x) => x.id === id);
-  return d ? d.label : id || "—";
+  if (d) return d.label;
+  const p = KEYS_USERS_DURATIONS.find((x) => x.id === id);
+  if (p) return p.label;
+  const m = String(id).match(/^(\d+)d$/);
+  if (m) return `${m[1]} Dia${m[1] === "1" ? "" : "s"}`;
+  return id;
 }
 
 /* ============ Main App ============ */
@@ -1087,9 +1341,9 @@ function App({ currentUser, onLogout }) {
   const [now, setNow] = useState(Date.now());
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
+  const [productTab, setProductTab] = useState("apk_mod"); // apk_mod | proxy | fake_lag
   const [showGenerate, setShowGenerate] = useState(false);
   const [editItem, setEditItem] = useState(null);
-  const [tab, setTab] = useState("dashboard"); // dashboard | chat
   const [showProfile, setShowProfile] = useState(false);
   const [me, setMe] = useState(currentUser);
   const [credits, setCredits] = useState(null);
@@ -1116,20 +1370,44 @@ function App({ currentUser, onLogout }) {
     return () => q.off("value", handler);
   }, [me.resellerKey]);
 
-  // Sincroniza com o Firebase em segundo plano. O app NUNCA depende disso
-  // para funcionar: toda ação atualiza a tela na hora (otimista) e tenta
-  // gravar no Firebase por baixo dos panos.
+  // Sincroniza APK MOD + FAKE LAG + PROXY em paralelo e mescla na tela.
   useEffect(() => {
     if (!fbAvailable) { setLoading(false); return; }
-    const handler = (snap) => {
+    let modList = [];
+    let flagList = [];
+    let proxyList = [];
+    let gotAny = false;
+
+    const mergeAndSet = () => {
+      const list = [...modList, ...flagList, ...proxyList].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      if (gotAny) {
+        synced.current = true;
+        setKeys(list);
+        setLoading(false);
+        setConnected(true);
+        setPermIssue(false);
+      }
+    };
+
+    const makeHandler = (product) => (snap) => {
       const val = snap.val() || {};
-      const list = Object.entries(val).map(([id, v]) => ({ id, ...v }));
-      list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-      synced.current = true;
-      setKeys(list);
-      setLoading(false);
-      setConnected(true);
-      setPermIssue(false);
+      let list;
+      if (isKeysUsersProduct(product)) {
+        list = Object.entries(val).map(([id, v]) => mapKeysUsersRecord(id, v, product));
+      } else {
+        list = Object.entries(val).map(([id, v]) => {
+          let activatedAt = v.activatedAt;
+          if (activatedAt === undefined) {
+            activatedAt = (v.expiresAt !== undefined && v.expiresAt !== null) ? (v.createdAt || 0) : null;
+          }
+          return { ...v, id, product: v.product || product, activatedAt };
+        });
+      }
+      if (product === "apk_mod") modList = list;
+      else if (product === "fake_lag") flagList = list;
+      else proxyList = list;
+      gotAny = true;
+      mergeAndSet();
     };
     const errHandler = (err) => {
       console.error(err);
@@ -1137,8 +1415,15 @@ function App({ currentUser, onLogout }) {
       setLoading(false);
       setPermIssue(true);
     };
-    dbRef.on("value", handler, errHandler);
-    return () => dbRef.off("value", handler);
+
+    if (modDbRef) modDbRef.on("value", makeHandler("apk_mod"), errHandler);
+    if (fakeLagDbRef) fakeLagDbRef.on("value", makeHandler("fake_lag"), errHandler);
+    if (proxyDbRef) proxyDbRef.on("value", makeHandler("proxy"), errHandler);
+    return () => {
+      if (modDbRef) modDbRef.off("value");
+      if (fakeLagDbRef) fakeLagDbRef.off("value");
+      if (proxyDbRef) proxyDbRef.off("value");
+    };
     // eslint-disable-next-line
   }, []);
 
@@ -1148,37 +1433,140 @@ function App({ currentUser, onLogout }) {
       .catch(() => push("Não foi possível copiar automaticamente. Selecione a key manualmente.", "error"));
   };
 
-  const generateKey = (durationId) => {
-    const durObj = DURATIONS.find((d) => d.id === durationId);
-    const code = generateKeyCode();
+  const generateKey = (durationId, product = "apk_mod", opts = {}) => {
+    const targetRef = getDbRefForProduct(product);
     const now2 = Date.now();
-    const expiresAt = durObj.ms === null ? null : now2 + durObj.ms;
-    const tempId = "local-" + now2 + "-" + Math.floor(Math.random() * 9999);
-    const record = { id: tempId, code, duration: durationId, createdAt: now2, expiresAt, owner: me.username };
 
-    // Atualiza a tela imediatamente — a key aparece na hora, sempre.
-    setKeys((k) => [record, ...k]);
-    push("Key gerada com sucesso!", "success");
+    // ----- PROXY / FAKE LAG (estrutura KeysUsers do SWB) -----
+    // Não adiciona local otimista quando Firebase está online (evita key duplicada)
+    if (isKeysUsersProduct(product)) {
+      const count = Math.max(1, Math.min(50, parseInt(opts.qty, 10) || 1));
+      const dispositivos = opts.dispositivos || "Livre";
+      const validade = durationToValidade(durationId, opts.customDays);
+      const daysNum = parseInt(validade, 10) || 0;
+      const durationMs = daysNum > 0 ? daysNum * 24 * 3600 * 1000 : null;
+      const codes = [];
+      const localRecords = [];
 
-    if (fbAvailable) {
-      dbRef.push({ code, duration: durationId, createdAt: now2, expiresAt, owner: me.username })
-        .catch((err) => {
-          console.error(err);
-          setPermIssue(true);
-          push("Gerada localmente, mas não foi salva no Firebase (sem permissão).", "error");
+      for (let i = 0; i < count; i++) {
+        const code = generateKeyCode(product);
+        codes.push(code);
+        const tempId = "local-" + now2 + "-" + i + "-" + Math.floor(Math.random() * 9999);
+        localRecords.push({
+          id: tempId,
+          code,
+          duration: durationId === "custom" ? `${daysNum}d` : durationId,
+          durationMs,
+          createdAt: now2,
+          activatedAt: null,
+          expiresAt: null,
+          owner: me.username,
+          product,
+          paused: false,
+          proxyDispositivos: dispositivos,
+          proxyValidade: validade,
         });
-    } else {
-      setPermIssue(true);
+
+        if (fbAvailable && targetRef) {
+          const newRef = targetRef.push();
+          // Estrutura idêntica ao gerador SWB (KeysUsers).
+          // dias DEVE ser número parseável (Double.parseDouble no APK) — nunca string vazia.
+          // dias "0" = ainda não ativada; no 1º acesso o APK troca por timestamp de expiração.
+          newRef.set({
+            key: code,
+            status: "",
+            dias: "0",
+            validade: String(validade),
+            dispositivos: String(dispositivos || "Livre"),
+            device: "",
+            uid: newRef.key,
+          }).catch((err) => {
+            console.error(err);
+            setPermIssue(true);
+          });
+        }
+      }
+
+      if (!fbAvailable || !targetRef) {
+        // Offline: só local
+        setKeys((k) => [...localRecords, ...k]);
+        setPermIssue(true);
+      }
+      // Online: a lista atualiza pelo listener do Firebase (1 key só)
+      push(
+        count > 1
+          ? `${count} keys ${PRODUCT_LABELS[product]} geradas!`
+          : `Key ${PRODUCT_LABELS[product]} gerada!`,
+        "success"
+      );
+      return count === 1 ? codes[0] : codes;
     }
+
+    // ----- APK MOD -----
+    const durObj = DURATIONS.find((d) => d.id === durationId) || DURATIONS[2];
+    const code = generateKeyCode(product);
+    const tempId = "local-" + now2 + "-" + Math.floor(Math.random() * 9999);
+    const record = {
+      id: tempId,
+      code,
+      duration: durationId,
+      durationMs: durObj.ms,
+      createdAt: now2,
+      activatedAt: null,
+      expiresAt: null,
+      owner: me.username,
+      product,
+      paused: false,
+    };
+
+    if (!fbAvailable || !targetRef) {
+      setKeys((k) => [record, ...k]);
+      setPermIssue(true);
+    } else {
+      targetRef.push({
+        code,
+        duration: durationId,
+        durationMs: durObj.ms,
+        createdAt: now2,
+        activatedAt: null,
+        expiresAt: null,
+        owner: me.username,
+        product,
+        paused: false,
+      }).catch((err) => {
+        console.error(err);
+        setPermIssue(true);
+        // fallback local se falhar gravação
+        setKeys((k) => [record, ...k]);
+        push("Gerada localmente, mas não foi salva no Firebase (sem permissão).", "error");
+      });
+    }
+    push(`Key ${PRODUCT_LABELS[product] || product} gerada!`, "success");
     return code;
   };
 
-  const editKey = (id, newExpiresAt) => {
-    setKeys((list) => list.map((k) => (k.id === id ? { ...k, expiresAt: newExpiresAt } : k)));
+  const editKey = (id, newExpiresAt, product) => {
+    const now2 = Date.now();
+    setKeys((list) => list.map((k) => (k.id === id ? { ...k, expiresAt: newExpiresAt, activatedAt: k.activatedAt || now2 } : k)));
     push("Key atualizada com sucesso!", "success");
-    if (fbAvailable && !String(id).startsWith("local-")) {
-      dbRef.child(id).update({ expiresAt: newExpiresAt })
-        .catch((err) => { console.error(err); setPermIssue(true); push("Alterado localmente, mas não sincronizado com o Firebase.", "error"); });
+    const ref = getDbRefForProduct(product || "apk_mod");
+    if (fbAvailable && ref && !String(id).startsWith("local-")) {
+      if (isKeysUsersProduct(product)) {
+        // dias sempre numérico: timestamp de expiração ou valor alto se vitalícia
+        const patch = {
+          status: "ativada",
+          dias: newExpiresAt === null ? "4102444800000" : String(newExpiresAt),
+        };
+        ref.child(id).update(patch)
+          .catch((err) => { console.error(err); setPermIssue(true); push("Alterado localmente, mas não sincronizado com o Firebase.", "error"); });
+      } else {
+        const patch = { expiresAt: newExpiresAt };
+        ref.child(id).once("value").then((snap) => {
+          const cur = snap.val() || {};
+          if (cur.activatedAt === null || cur.activatedAt === undefined) patch.activatedAt = now2;
+          return ref.child(id).update(patch);
+        }).catch((err) => { console.error(err); setPermIssue(true); push("Alterado localmente, mas não sincronizado com o Firebase.", "error"); });
+      }
     } else if (fbAvailable) {
       setPermIssue(true);
     }
@@ -1187,8 +1575,9 @@ function App({ currentUser, onLogout }) {
   const deleteKey = (item) => {
     setKeys((list) => list.filter((k) => k.id !== item.id));
     push("Key deletada / acesso revogado.", "success");
-    if (fbAvailable && !String(item.id).startsWith("local-")) {
-      dbRef.child(item.id).remove()
+    const ref = getDbRefForProduct(item.product || "apk_mod");
+    if (fbAvailable && ref && !String(item.id).startsWith("local-")) {
+      ref.child(item.id).remove()
         .catch((err) => { console.error(err); setPermIssue(true); push("Removida localmente, mas não sincronizada com o Firebase.", "error"); });
     } else if (fbAvailable) {
       setPermIssue(true);
@@ -1222,46 +1611,64 @@ function App({ currentUser, onLogout }) {
     }));
     push(pause ? "Todas as keys foram pausadas." : "Todas as keys foram retomadas.", "success");
     if (!fbAvailable) return;
-    dbRef.once("value").then((snap) => {
-      const val = snap.val() || {};
-      const updates = {};
-      Object.entries(val).forEach(([id, k]) => {
-        if (pause && !k.paused) { updates[`${id}/paused`] = true; updates[`${id}/pausedAt`] = now2; }
-        if (!pause && k.paused) {
-          const shift = now2 - (k.pausedAt || now2);
-          updates[`${id}/paused`] = false;
-          updates[`${id}/pausedAt`] = null;
-          if (k.expiresAt !== null && k.expiresAt !== undefined) updates[`${id}/expiresAt`] = k.expiresAt + shift;
-        }
+    const applyOnRef = (ref, isProxy) => {
+      if (!ref) return;
+      ref.once("value").then((snap) => {
+        const val = snap.val() || {};
+        const updates = {};
+        Object.entries(val).forEach(([id, k]) => {
+          if (isProxy) {
+            const st = (k.status || "").toLowerCase();
+            if (pause && st !== "pausada") updates[`${id}/status`] = "pausada";
+            if (!pause && st === "pausada") updates[`${id}/status`] = "ativada";
+          } else {
+            if (pause && !k.paused) { updates[`${id}/paused`] = true; updates[`${id}/pausedAt`] = now2; }
+            if (!pause && k.paused) {
+              const shift = now2 - (k.pausedAt || now2);
+              updates[`${id}/paused`] = false;
+              updates[`${id}/pausedAt`] = null;
+              if (k.expiresAt !== null && k.expiresAt !== undefined) updates[`${id}/expiresAt`] = k.expiresAt + shift;
+            }
+          }
+        });
+        if (Object.keys(updates).length) ref.update(updates).catch((err) => console.error(err));
       });
-      if (Object.keys(updates).length) dbRef.update(updates).catch((err) => console.error(err));
-    });
+    };
+    applyOnRef(modDbRef, false);
+    applyOnRef(fakeLagDbRef, true);
+    applyOnRef(proxyDbRef, true);
   };
 
-  // Usuários comuns só enxergam as próprias keys; dono/super veem tudo.
-  const myKeys = useMemo(() => (isAdmin ? keys : keys.filter((k) => k.owner === me.username)), [keys, isAdmin, me.username]);
+  // Filtra pelo produto da aba + usuários comuns só enxergam as próprias keys.
+  const myKeys = useMemo(() => {
+    let list = keys.filter((k) => (k.product || "apk_mod") === productTab);
+    if (!isAdmin) list = list.filter((k) => k.owner === me.username);
+    return list;
+  }, [keys, isAdmin, me.username, productTab]);
 
   const stats = useMemo(() => {
-    let active = 0, warn = 0, expired = 0, paused = 0;
+    let active = 0, warn = 0, expired = 0, paused = 0, pending = 0;
     myKeys.forEach((k) => {
-      const s = computeStatus(k.expiresAt, now, k.paused);
+      const s = computeStatus(k, now);
       if (s.status === "paused") paused++;
+      else if (s.status === "pending") pending++;
       else if (s.status === "green") active++;
       else if (s.status === "yellow") warn++;
       else expired++;
     });
-    return { total: myKeys.length, active, warn, expired, paused };
+    return { total: myKeys.length, active, warn, expired, paused, pending };
   }, [myKeys, now]);
 
   const filtered = useMemo(() => {
     return myKeys.filter((k) => {
       if (search && !k.code.toLowerCase().includes(search.toLowerCase())) return false;
       if (filter === "all") return true;
-      const s = computeStatus(k.expiresAt, now, k.paused).status;
+      const s = computeStatus(k, now).status;
       if (filter === "active") return s === "green";
       if (filter === "warn") return s === "yellow";
       if (filter === "expired") return s === "red";
       if (filter === "paused") return s === "paused";
+      if (filter === "pending") return s === "pending";
       return true;
     });
   }, [myKeys, search, filter, now]);
@@ -1300,23 +1707,26 @@ function App({ currentUser, onLogout }) {
         </div>
       </header>
 
-      <div className="nav-tabs">
-        <button className={`nav-tab ${tab === "dashboard" ? "sel" : ""}`} onClick={() => setTab("dashboard")}>
-          <Icon name="key" size={14} /> Painel
-        </button>
-        <button className={`nav-tab ${tab === "chat" ? "sel" : ""}`} onClick={() => setTab("chat")}>
-          <Icon name="chat" size={14} /> Chat
-        </button>
+      <div className="nav-tabs" style={{ marginTop: 4 }}>
+        {[
+          ["apk_mod", "APK MOD"],
+          ["proxy", "PROXY"],
+          ["fake_lag", "FAKE LAG"],
+        ].map(([id, label]) => (
+          <button
+            key={id}
+            className={`nav-tab ${productTab === id ? "sel" : ""}`}
+            onClick={() => { setProductTab(id); setFilter("all"); }}
+          >
+            {label}
+          </button>
+        ))}
       </div>
 
-      {tab === "chat" ? (
-        <ChatPanel me={me} isAdmin={isAdmin} push={push} allKeysRef={dbRef} usersRef={usersRef} />
-      ) : (
-      <>
       <div className="hero-cover" role="img" aria-label="Pânico Cheats — capa">
         <div className="hero-inner">
           <div className="hero-txt">
-            <div className="k1">Painel oficial</div>
+            <div className="k1">{PRODUCT_LABELS[productTab]}</div>
             <div className="k2">GERENCIAMENTO DE LICENÇAS</div>
           </div>
           <button className="btn btn-primary" onClick={() => setShowGenerate(true)}>
@@ -1341,6 +1751,7 @@ function App({ currentUser, onLogout }) {
         <div className="stat active"><span className="num">{stats.active}</span><span className="lbl">Ativas</span></div>
         <div className="stat warn"><span className="num">{stats.warn}</span><span className="lbl">Expirando</span></div>
         <div className="stat expired"><span className="num">{stats.expired}</span><span className="lbl">Expiradas</span></div>
+        <div className="stat"><span className="num" style={{ color: "#8ba3c7" }}>{stats.pending}</span><span className="lbl">Aguardando</span></div>
         <div className="stat"><span className="num" style={{ color: "#8ba3c7" }}>{stats.paused}</span><span className="lbl">Pausadas</span></div>
       </div>
 
@@ -1357,6 +1768,7 @@ function App({ currentUser, onLogout }) {
           {[
             ["all", "Todas"],
             ["active", "Ativas"],
+            ["pending", "Aguardando"],
             ["warn", "Expirando"],
             ["expired", "Expiradas"],
             ["paused", "Pausadas"],
@@ -1397,6 +1809,7 @@ function App({ currentUser, onLogout }) {
               <thead>
                 <tr>
                   <th>Status</th>
+                  <th>Produto</th>
                   <th>Key</th>
                   <th>Duração</th>
                   {isAdmin && <th>Dono</th>}
@@ -1406,40 +1819,68 @@ function App({ currentUser, onLogout }) {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((item) => (
-                  <tr key={item.id}>
+                {filtered.map((item) => {
+                  const isLifetime = item.duration === "lifetime" || (item.activatedAt && (item.expiresAt === null || item.expiresAt === undefined));
+                  const product = item.product || "apk_mod";
+                  return (
+                  <tr key={`${product}-${item.id}`}>
                     <td><StatusBits item={item} now={now} /></td>
+                    <td>
+                      <span className={`badge ${product === "fake_lag" ? "product-flag" : product === "proxy" ? "product-proxy" : "product-mod"}`}>
+                        {PRODUCT_LABELS[product] || product}
+                      </span>
+                    </td>
                     <td>
                       <div className="key-code">
                         <span className="code mono">{item.code}</span>
                       </div>
                     </td>
                     <td>
-                      {item.expiresAt === null || item.expiresAt === undefined ? (
-                        <span className="badge lifetime"><Icon name="infinity" size={11} /> Vitalícia</span>
-                      ) : (
-                        <span className="badge">{durationLabel(item.duration)}</span>
-                      )}
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {isLifetime ? (
+                          <span className="badge lifetime"><Icon name="infinity" size={11} /> Vitalícia</span>
+                        ) : (
+                          <span className="badge">{durationLabel(item.duration)}</span>
+                        )}
+                        {isKeysUsersProduct(product) && item.proxyDispositivos && (
+                          <span className={`badge ${product === "fake_lag" ? "product-flag" : "product-proxy"}`}>
+                            {item.proxyDispositivos === "Livre" ? "Disp. Livre" : `${item.proxyDispositivos} disp.`}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     {isAdmin && <td style={{ color: "var(--ink-dim)" }}>{item.owner || "—"}</td>}
                     <td>{fmtDate(item.createdAt)}</td>
-                    <td>{item.expiresAt ? fmtDate(item.expiresAt) : "—"}</td>
+                    <td>
+                      {!item.activatedAt
+                        ? "Após 1º acesso"
+                        : item.expiresAt
+                          ? fmtDate(item.expiresAt)
+                          : "—"}
+                    </td>
                     <td>
                       <div className="actions-cell">
                         <KeyActions item={item} onEdit={setEditItem} onDelete={deleteKey} onCopy={copyCode} onTogglePause={toggleKeyPause} isAdmin={isAdmin} />
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
 
             <div className="cards">
-              {filtered.map((item) => (
-                <div className="key-card" key={item.id}>
+              {filtered.map((item) => {
+                const isLifetime = item.duration === "lifetime" || (item.activatedAt && (item.expiresAt === null || item.expiresAt === undefined));
+                const product = item.product || "apk_mod";
+                return (
+                <div className="key-card" key={`${product}-${item.id}`}>
                   <div className="key-card-top">
                     <StatusBits item={item} now={now} />
-                    {item.expiresAt === null || item.expiresAt === undefined ? (
+                    <span className={`badge ${product === "fake_lag" ? "product-flag" : product === "proxy" ? "product-proxy" : "product-mod"}`}>
+                      {PRODUCT_LABELS[product] || product}
+                    </span>
+                    {isLifetime ? (
                       <span className="badge lifetime"><Icon name="infinity" size={11} /> Vitalícia</span>
                     ) : (
                       <span className="badge">{durationLabel(item.duration)}</span>
@@ -1449,21 +1890,27 @@ function App({ currentUser, onLogout }) {
                   <div className="key-card-meta">
                     <span>Criada: {fmtDate(item.createdAt)}</span>
                     <span>•</span>
-                    <span>Expira: {item.expiresAt ? fmtDate(item.expiresAt) : "—"}</span>
+                    <span>
+                      Expira:{" "}
+                      {!item.activatedAt
+                        ? "Após 1º acesso"
+                        : item.expiresAt
+                          ? fmtDate(item.expiresAt)
+                          : "—"}
+                    </span>
                   </div>
                   <div className="key-card-actions">
                     <KeyActions item={item} onEdit={setEditItem} onDelete={deleteKey} onCopy={copyCode} onTogglePause={toggleKeyPause} isAdmin={isAdmin} />
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </>
         )}
       </div>
 
       <div className="footer-note">PÂNICO CHEATS © {new Date().getFullYear()} — Painel interno de gerenciamento de licenças.</div>
-      </>
-      )}
 
       {showProfile && (
         <ProfileModal
@@ -1473,7 +1920,11 @@ function App({ currentUser, onLogout }) {
           keysCount={myKeys.length}
           onClose={() => setShowProfile(false)}
           onUpdate={(patch) => {
-            setMe((m) => ({ ...m, ...patch }));
+            setMe((m) => {
+              const next = { ...m, ...patch };
+              saveSession(next);
+              return next;
+            });
             if (authDbAvailable && me.id) usersRef.child(me.id).update(patch).catch((e) => console.error(e));
           }}
           push={push}
@@ -1482,6 +1933,7 @@ function App({ currentUser, onLogout }) {
 
       {showGenerate && (
         <GenerateModal
+          product={productTab}
           onClose={() => setShowGenerate(false)}
           onGenerate={generateKey}
           onCopy={copyCode}
@@ -1616,199 +2068,6 @@ function ProfileModal({ me, isAdmin, credits, keysCount, onClose, onUpdate, push
   );
 }
 
-/* ============ Chat Panel ============ */
-const CHAT_HELP = "Comandos: /delkey CODIGO · /pausekey CODIGO · /unpausekey CODIGO · /pauseall · /unpauseall · /delmsg ID · /promote usuario · /demote usuario · /ban usuario · /help";
-
-function ChatPanel({ me, isAdmin, push }) {
-  const [messages, setMessages] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [text, setText] = useState("");
-  const chatRef = useRef(null);
-  const bottomRef = useRef(null);
-  const audioRef = useRef(null);
-
-  useEffect(() => {
-    if (!authDbAvailable) { setLoading(false); return; }
-    chatRef.current = firebase.database(firebase.app("auth-app")).ref("chat_messages");
-    const handler = (snap) => {
-      const val = snap.val() || {};
-      const list = Object.entries(val).map(([id, v]) => ({ id, ...v }));
-      list.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
-      setMessages(list);
-      setLoading(false);
-    };
-    chatRef.current.limitToLast(200).on("value", handler);
-    return () => { chatRef.current && chatRef.current.off("value", handler); };
-  }, []);
-
-  useEffect(() => { bottomRef.current && bottomRef.current.scrollIntoView({ block: "end" }); }, [messages]);
-
-  const sendRaw = (payload) => {
-    if (!authDbAvailable || !chatRef.current) { push("Chat indisponível no momento.", "error"); return; }
-    chatRef.current.push({
-      ...payload,
-      sender: me.username,
-      senderRole: me.role || "user",
-      senderAvatar: me.avatar || null,
-      createdAt: Date.now(),
-    }).catch((err) => { console.error(err); push("Erro ao enviar mensagem.", "error"); });
-  };
-
-  const pauseKeyByCode = (code, pause) => {
-    dbRef.orderByChild("code").equalTo(code.toUpperCase()).once("value").then((snap) => {
-      const val = snap.val();
-      if (!val) { push("Key não encontrada.", "error"); return; }
-      const [id, k] = Object.entries(val)[0];
-      applyPause(id, k, pause).then(() => push(pause ? "Key pausada." : "Key retomada.", "success"));
-    });
-  };
-
-  const pauseAllKeys = (pause) => {
-    dbRef.once("value").then((snap) => {
-      const val = snap.val() || {};
-      const now = Date.now();
-      const updates = {};
-      Object.entries(val).forEach(([id, k]) => {
-        if (pause && !k.paused) { updates[`${id}/paused`] = true; updates[`${id}/pausedAt`] = now; }
-        if (!pause && k.paused) {
-          const shift = now - (k.pausedAt || now);
-          updates[`${id}/paused`] = false;
-          updates[`${id}/pausedAt`] = null;
-          if (k.expiresAt !== null && k.expiresAt !== undefined) updates[`${id}/expiresAt`] = k.expiresAt + shift;
-        }
-      });
-      if (Object.keys(updates).length === 0) { push("Nada para atualizar.", "success"); return; }
-      dbRef.update(updates).then(() => push(pause ? "Todas as keys foram pausadas." : "Todas as keys foram retomadas.", "success"));
-    });
-  };
-
-  const runCommand = (cmdLine) => {
-    const parts = cmdLine.trim().split(/\s+/);
-    const cmd = parts[0].toLowerCase();
-    const arg = parts.slice(1).join(" ");
-
-    if (cmd === "/help") { push(CHAT_HELP, "success"); return; }
-
-    if (!isAdmin) { push("Apenas dono/super usuário podem usar comandos.", "error"); return; }
-
-    if (cmd === "/delkey" && arg) {
-      dbRef.orderByChild("code").equalTo(arg.toUpperCase()).once("value").then((snap) => {
-        const val = snap.val();
-        if (!val) { push("Key não encontrada.", "error"); return; }
-        const [id] = Object.entries(val)[0];
-        dbRef.child(id).remove().then(() => push("Key removida via chat.", "success"));
-      });
-    } else if (cmd === "/pausekey" && arg) {
-      pauseKeyByCode(arg, true);
-    } else if (cmd === "/unpausekey" && arg) {
-      pauseKeyByCode(arg, false);
-    } else if (cmd === "/pauseall") {
-      pauseAllKeys(true);
-    } else if (cmd === "/unpauseall") {
-      pauseAllKeys(false);
-    } else if (cmd === "/delmsg" && arg) {
-      chatRef.current.child(arg.trim()).remove().then(() => push("Mensagem removida.", "success"));
-    } else if ((cmd === "/promote" || cmd === "/demote") && arg) {
-      if (me.role !== "dono") { push("Somente o dono pode alterar cargos.", "error"); return; }
-      usersRef.orderByChild("username").equalTo(arg.trim()).once("value").then((snap) => {
-        const val = snap.val();
-        if (!val) { push("Usuário não encontrado.", "error"); return; }
-        const [id] = Object.entries(val)[0];
-        usersRef.child(id).update({ role: cmd === "/promote" ? "super" : "user" })
-          .then(() => push(`Cargo de ${arg} atualizado.`, "success"));
-      });
-    } else if (cmd === "/ban" && arg) {
-      usersRef.orderByChild("username").equalTo(arg.trim()).once("value").then((snap) => {
-        const val = snap.val();
-        if (!val) { push("Usuário não encontrado.", "error"); return; }
-        const [id] = Object.entries(val)[0];
-        usersRef.child(id).remove().then(() => push(`${arg} foi banido.`, "success"));
-      });
-    } else {
-      push("Comando não reconhecido. Use /help.", "error");
-    }
-  };
-
-  const handleSend = () => {
-    if (!text.trim()) return;
-    if (text.startsWith("/")) { runCommand(text); setText(""); return; }
-    sendRaw({ type: "text", content: text.trim() });
-    setText("");
-  };
-
-  const onPickAudio = (e) => {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
-    fileToDataUrl(file, 6 * 1024 * 1024)
-      .then((dataUrl) => sendRaw({ type: "audio", content: dataUrl, fileName: file.name }))
-      .catch((err) => push(err.message || "Áudio muito grande.", "error"));
-    e.target.value = "";
-  };
-
-  const deleteMessage = (msg) => {
-    if (!isAdmin && msg.sender !== me.username) return;
-    chatRef.current.child(msg.id).remove().then(() => push("Mensagem removida.", "success"));
-  };
-
-  const renderContent = (m) => {
-    if (m.type === "audio") return <audio src={m.content} controls className="chat-audio" />;
-    return <div className="chat-text">{m.content}</div>;
-  };
-
-  return (
-    <div className="chat-wrap" style={{ position: "relative" }}>
-      <div className="chat-msgs">
-        {loading ? (
-          <div className="chat-empty">Carregando conversas...</div>
-        ) : messages.length === 0 ? (
-          <div className="chat-empty">Nenhuma mensagem ainda. Diga oi!</div>
-        ) : (
-          messages.map((m) => {
-            const mine = m.sender === me.username;
-            const canDelete = isAdmin || mine;
-            return (
-              <div key={m.id} className={`chat-msg ${mine ? "mine" : ""}`}>
-                {m.senderAvatar ? <img src={m.senderAvatar} className="chat-avatar" alt="" /> : <div className="chat-avatar-empty"><Icon name="user" size={14} /></div>}
-                <div className="chat-bubble">
-                  {canDelete && (
-                    <button className="chat-del" onClick={() => deleteMessage(m)} title="Apagar"><Icon name="x" size={11} /></button>
-                  )}
-                  <div className="chat-sender">
-                    {m.sender}
-                    {(m.senderRole === "dono" || m.senderRole === "super") && (
-                      <span className="role-badge">{m.senderRole === "dono" ? "DONO" : "SUPER"}</span>
-                    )}
-                  </div>
-                  {renderContent(m)}
-                  <div className="chat-time">{new Date(m.createdAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</div>
-                </div>
-              </div>
-            );
-          })
-        )}
-        <div ref={bottomRef}></div>
-      </div>
-
-      <div className="chat-inputbar">
-        {isAdmin && <div className="chat-hint">{CHAT_HELP}</div>}
-        <div className="chat-row">
-          <button className="chat-icon-btn" onClick={() => audioRef.current.click()} title="Enviar áudio"><Icon name="music" size={16} /></button>
-          <input
-            type="text"
-            placeholder={isAdmin ? "Mensagem ou comando (/help)..." : "Digite uma mensagem..."}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSend()}
-          />
-          <button className="chat-icon-btn send" onClick={handleSend} title="Enviar"><Icon name="send" size={15} /></button>
-        </div>
-      </div>
-
-      <input ref={audioRef} type="file" accept="audio/*" style={{ display: "none" }} onChange={onPickAudio} />
-    </div>
-  );
-}
-
 /* ============ Auth Screen (login / cadastro) ============ */
 function AuthScreen({ onSuccess }) {
   const [tab, setTab] = useState("login");
@@ -1936,22 +2195,55 @@ function AuthScreen({ onSuccess }) {
   );
 }
 
-function AuthGate() {
-  const [user, setUser] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("panico_session")); } catch { return null; }
-  });
+const SESSION_KEY = "panico_cheats_session_v1";
 
-  const handleSuccess = (u) => {
-    localStorage.setItem("panico_session", JSON.stringify(u));
+function loadSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data || !data.username || !data.id) return null;
+    return data;
+  } catch (e) {
+    return null;
+  }
+}
+
+function saveSession(user) {
+  try {
+    if (!user) {
+      localStorage.removeItem(SESSION_KEY);
+      return;
+    }
+    // Não salva senha — só dados de sessão necessários
+    const safe = {
+      id: user.id,
+      username: user.username,
+      gmail: user.gmail || "",
+      role: user.role || "user",
+      resellerKey: user.resellerKey || "",
+      avatar: user.avatar || null,
+    };
+    localStorage.setItem(SESSION_KEY, JSON.stringify(safe));
+  } catch (e) {
+    console.error("Não foi possível salvar a sessão:", e);
+  }
+}
+
+function AuthGate() {
+  const [user, setUser] = useState(() => loadSession());
+
+  const handleLogin = (u) => {
+    saveSession(u);
     setUser(u);
   };
 
   const handleLogout = () => {
-    localStorage.removeItem("panico_session");
+    saveSession(null);
     setUser(null);
   };
 
-  if (!user) return <AuthScreen onSuccess={handleSuccess} />;
+  if (!user) return <AuthScreen onSuccess={handleLogin} />;
   return <App currentUser={user} onLogout={handleLogout} />;
 }
 
