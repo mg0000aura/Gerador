@@ -863,7 +863,7 @@ function randSegment(len) {
 function generateKeyCode(product) {
   // PROXY / FAKE LAG: formato do gerador SWB (ex: Panico-dp6716)
   if (product === "proxy" || product === "fake_lag") {
-    const prefix = product === "fake_lag" ? "Flag" : "Panico";
+    const prefix = product === "fake_lag" ? "Fake" : "Panico";
     return `${prefix}-${randSegment(6).toLowerCase()}`;
   }
   return `PANICO-${randSegment(4)}-${randSegment(4)}-${randSegment(4)}`;
@@ -1601,7 +1601,10 @@ function App({ currentUser, onLogout }) {
 
   const pauseAll = (pause) => {
     const now2 = Date.now();
+    const tab = productTab || "apk_mod";
+    // Só altera keys da aba atual
     setKeys((list) => list.map((k) => {
+      if ((k.product || "apk_mod") !== tab) return k;
       if (pause && !k.paused) return { ...k, paused: true, pausedAt: now2 };
       if (!pause && k.paused) {
         const shift = now2 - (k.pausedAt || now2);
@@ -1609,34 +1612,34 @@ function App({ currentUser, onLogout }) {
       }
       return k;
     }));
-    push(pause ? "Todas as keys foram pausadas." : "Todas as keys foram retomadas.", "success");
+    const label = PRODUCT_LABELS[tab] || tab;
+    push(pause ? `Keys de ${label} pausadas.` : `Keys de ${label} retomadas.`, "success");
     if (!fbAvailable) return;
-    const applyOnRef = (ref, isProxy) => {
-      if (!ref) return;
-      ref.once("value").then((snap) => {
-        const val = snap.val() || {};
-        const updates = {};
-        Object.entries(val).forEach(([id, k]) => {
-          if (isProxy) {
-            const st = (k.status || "").toLowerCase();
-            if (pause && st !== "pausada") updates[`${id}/status`] = "pausada";
-            if (!pause && st === "pausada") updates[`${id}/status`] = "ativada";
-          } else {
-            if (pause && !k.paused) { updates[`${id}/paused`] = true; updates[`${id}/pausedAt`] = now2; }
-            if (!pause && k.paused) {
-              const shift = now2 - (k.pausedAt || now2);
-              updates[`${id}/paused`] = false;
-              updates[`${id}/pausedAt`] = null;
-              if (k.expiresAt !== null && k.expiresAt !== undefined) updates[`${id}/expiresAt`] = k.expiresAt + shift;
-            }
+
+    const ref = getDbRefForProduct(tab);
+    if (!ref) return;
+    const isKU = isKeysUsersProduct(tab);
+
+    ref.once("value").then((snap) => {
+      const val = snap.val() || {};
+      const updates = {};
+      Object.entries(val).forEach(([id, k]) => {
+        if (isKU) {
+          const st = (k.status || "").toLowerCase();
+          if (pause && st !== "pausada") updates[`${id}/status`] = "pausada";
+          if (!pause && st === "pausada") updates[`${id}/status`] = "ativada";
+        } else {
+          if (pause && !k.paused) { updates[`${id}/paused`] = true; updates[`${id}/pausedAt`] = now2; }
+          if (!pause && k.paused) {
+            const shift = now2 - (k.pausedAt || now2);
+            updates[`${id}/paused`] = false;
+            updates[`${id}/pausedAt`] = null;
+            if (k.expiresAt !== null && k.expiresAt !== undefined) updates[`${id}/expiresAt`] = k.expiresAt + shift;
           }
-        });
-        if (Object.keys(updates).length) ref.update(updates).catch((err) => console.error(err));
+        }
       });
-    };
-    applyOnRef(modDbRef, false);
-    applyOnRef(fakeLagDbRef, true);
-    applyOnRef(proxyDbRef, true);
+      if (Object.keys(updates).length) ref.update(updates).catch((err) => console.error(err));
+    });
   };
 
   // Filtra pelo produto da aba + usuários comuns só enxergam as próprias keys.
@@ -1780,8 +1783,8 @@ function App({ currentUser, onLogout }) {
         </div>
         {isAdmin && (
           <>
-            <button className="btn btn-ghost" onClick={() => pauseAll(true)}><Icon name="clock" size={14} /> Pausar todas</button>
-            <button className="btn btn-ghost" onClick={() => pauseAll(false)}><Icon name="zap" size={14} /> Retomar todas</button>
+            <button className="btn btn-ghost" onClick={() => pauseAll(true)}><Icon name="clock" size={14} /> Pausar {PRODUCT_LABELS[productTab] || "todas"}</button>
+            <button className="btn btn-ghost" onClick={() => pauseAll(false)}><Icon name="zap" size={14} /> Retomar {PRODUCT_LABELS[productTab] || "todas"}</button>
           </>
         )}
       </div>
